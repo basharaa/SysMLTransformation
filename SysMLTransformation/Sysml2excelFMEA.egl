@@ -1,0 +1,510 @@
+<?xml version="1.0"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+          xmlns:o="urn:schemas-microsoft-com:office:office"
+          xmlns:x="urn:schemas-microsoft-com:office:excel"
+          xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+          xmlns:html="http://www.w3.org/TR/REC-html40">
+  <DocumentProperties xmlns="urn:schemas-microsoft-com:office:office">  <LastAuthor/>   <Created/>  <LastSaved/>  <Version>14.0</Version>  </DocumentProperties>
+  <OfficeDocumentSettings xmlns="urn:schemas-microsoft-com:office:office">   <AllowPNG/> </OfficeDocumentSettings>
+  <ExcelWorkbook xmlns="urn:schemas-microsoft-com:office:excel">
+    <WindowHeight>16380</WindowHeight>
+    <WindowWidth>38400</WindowWidth>
+    <WindowTopX>0</WindowTopX>
+    <WindowTopY>0</WindowTopY>
+    <Date1904/>
+    <ProtectStructure>False</ProtectStructure>
+    <ProtectWindows>False</ProtectWindows>
+  </ExcelWorkbook>
+  <Styles>
+    <Style ss:ID="Default" ss:Name="Normal">
+      <Alignment ss:Vertical="Bottom"/>
+      <Borders/>
+      <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="12" ss:Color="#000000"/>
+      <Interior/>
+      <NumberFormat/>
+      <Protection/>
+    </Style>
+    <Style ss:ID="s62">
+      <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="12" ss:Color="#000000"/>
+    </Style>
+    <Style ss:ID="s64">
+      <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
+      <Font ss:FontName="Calibri" ss:Size="26" ss:Color="#000000"/>
+    </Style>
+    <Style ss:ID="s66">
+      <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
+      <Font ss:FontName="Calibri" ss:Size="20" ss:Color="#000000"/>
+    </Style>
+    <Style ss:ID="s67">
+      <Alignment ss:Horizontal="Left" ss:Vertical="Bottom" ss:WrapText="1"/>
+      <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="12" ss:Color="#000000"
+          ss:Bold="1"/>
+    </Style>
+    <Style ss:ID="s69">
+      <Alignment ss:Vertical="Bottom" ss:WrapText="1"/>
+      <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="12" ss:Color="#000000"
+          ss:Bold="1"/>
+    </Style>
+    <Style ss:ID="s70">
+      <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="12" ss:Color="#000000"
+          ss:Bold="1"/>
+    </Style>
+    <Style ss:ID="s71">
+      <Alignment ss:Horizontal="Left" ss:Vertical="Bottom"/>
+      <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="12" ss:Color="#FFFFFF"
+          ss:Bold="1"/>
+      <Interior ss:Color="#333333" ss:Pattern="Solid"/>
+    </Style>
+    <Style ss:ID="s72">
+      <Alignment ss:Vertical="Top" ss:WrapText="1"/>
+      <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="12" ss:Color="#000000"/>
+    </Style>
+  </Styles>
+<Worksheet ss:Name="FMEA">
+  <Table ss:ExpandedColumnCount="6" 
+  	x:FullColumns="1"
+    x:FullRows="1" 
+    ss:StyleID="s62" 
+    ss:DefaultColumnWidth="150"
+    ss:DefaultRowHeight="15">
+    <Row>
+      <Cell ss:MergeAcross="1" ss:StyleID="s67"><Data ss:Type="String">System:</Data></Cell>
+      <Cell ss:MergeAcross="3" ss:StyleID="s67"><Data ss:Type="String">[%=SysML!Model.all().first().name%]</Data></Cell>
+    </Row>
+    <Row>
+      <Cell ss:StyleID="s67"/>
+      <Cell ss:StyleID="s67"/>
+      <Cell ss:StyleID="s67"/>
+      <Cell ss:StyleID="s69"/>
+      <Cell ss:StyleID="s70"/>
+      <Cell ss:StyleID="s69"/>
+    </Row>
+    <Row>
+      <Cell ss:StyleID="s71"><Data ss:Type="String">Component</Data></Cell>
+      <Cell ss:StyleID="s71"><Data ss:Type="String">Potential Failure Mode</Data></Cell>
+      <Cell ss:StyleID="s71"><Data ss:Type="String">Potential Failure Cause</Data></Cell>
+      <Cell ss:StyleID="s71"><Data ss:Type="String">Potential Local Effects</Data></Cell>
+      <Cell ss:StyleID="s71"><Data ss:Type="String">Potential System Effects</Data></Cell>
+      <Cell ss:StyleID="s71"><Data ss:Type="String">Occurrence (Prob)</Data></Cell>
+    </Row>
+[%for (component in getAllComponents()) { 
+	var failureModes = getFailureModes(component);
+	if (failureModes.isUndefined() or failureModes.size() < 1) {
+		log("component: " + component);
+		continue;
+	}
+%] 
+   <Row ss:AutoFitHeight="1">
+      <Cell ss:StyleID="s72" ss:MergeDown="[%=failureModes.size() - 1%]"><Data ss:Type="String">[%=component.name%]</Data></Cell> [*Component*]
+      [%for (failureMode in failureModes) { %] 
+	      <Cell ss:StyleID="s72" ss:Index="2"><Data ss:Type="String">[%=failureMode.getName()%]</Data></Cell> [*Failure Mode*]
+	      <Cell ss:StyleID="s72" ss:Index="3"><Data ss:Type="String">[%=failureMode.getCause()%]</Data></Cell> [*Failure Cause*]
+	      <Cell ss:StyleID="s72" ss:Index="4"><Data ss:Type="String">[%=failureMode.getLocalEffect()%]</Data></Cell> [*Local Effect*]
+	      <Cell ss:StyleID="s72" ss:Index="5"><Data ss:Type="String">[%=failureMode.getSystemEffect()%]</Data></Cell> [*System Effect*]
+	      <Cell ss:StyleID="s72" ss:Index="6"><Data ss:Type="String">[%=failureMode.getProbability()%]</Data></Cell> [*Probability*]
+      [%  if(failureModes.size() > 1 and hasMore) { %]
+      		</Row>
+      		<Row ss:AutoFitHeight="1">
+      	  [%}
+      }%]
+   </Row>
+[%}%]
+  </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+    <Print>
+      <ValidPrinterInfo/>
+      <PaperSizeIndex>9</PaperSizeIndex>
+      <HorizontalResolution>-4</HorizontalResolution>
+      <VerticalResolution>-4</VerticalResolution>
+    </Print>
+    <PageLayoutZoom>0</PageLayoutZoom>
+    <Selected/>
+    <Panes>
+      <Pane>
+        <Number>3</Number>
+        <ActiveRow>0</ActiveRow>
+        <ActiveCol>2</ActiveCol>
+      </Pane>
+    </Panes>
+    <ProtectObjects>False</ProtectObjects>
+    <ProtectScenarios>False</ProtectScenarios>
+  </WorksheetOptions>
+</Worksheet>
+</Workbook>
+[%
+operation getAllComponents() {
+	var result : Sequence;
+	var blocks = SysML!Block.all;
+	for(blk in blocks) {
+		var base = blk.base_class;
+		if(base.hasFailureBehaviour()
+			or base.hasStereotype("DaComponent")){
+			result.add(base);
+		}
+	}
+	return result;
+}
+
+operation getFailureModes(component : SysML!Class) {
+	var result : OrderedSet;
+	if (component.hasFailureBehaviour()) {
+		var stateMachine = component.classifierBehavior;
+		var triggers = SysML!Trigger.all.select(trgr | trgr.isContainedInStatemachine(stateMachine) and trgr.isFailure());
+		for(trgr in triggers) {
+			result.add(trgr);
+		}
+	} else {
+		result.add(component);
+	}
+	return result;
+}
+
+operation SysML!Trigger getName() : String {
+	var result = self.getEvent().name;
+	("event name: " + result).println();
+	("event: " + self.getEvent()).println();
+	if (self.getEvent().isTypeOf(SysML!TimeEvent) ) {
+		result = "Timeout " + self.getEvent().name;
+		if (self.getPorts().notEmpty()) {
+			result = result + " on " + self.getPorts().first().name;
+		}
+		self.~cause = "Omission of Input";
+	}
+	
+	return result;
+}
+
+operation SysML!Class getName() :String {
+	var result :String = self.name + " Failure";
+	if (self. getResourceMultiplicity() > 1) {
+		result = result.concat(" * " + self. getResourceMultiplicity());
+	} 
+	return result;
+}
+
+operation SysML!Trigger getProbability() {
+	return self.getStereotypeAttribute("DaStep","prob").asDouble();
+}
+
+operation SysML!Class getProbability() {
+	var result = self.getStereotypeAttribute("DaComponent","failure.OccurrenceProb").asDouble();
+	if (self. getResourceMultiplicity() > 1) {
+		result = result * self. getResourceMultiplicity();
+	}
+	return result;
+}
+
+operation SysML!Class getResourceMultiplicity () : Any {
+	return self.getStereotypeAttribute("DaComponent", "resMult");
+}
+
+operation SysML!Trigger getCause() {
+	var result;
+	if(self.~cause.isDefined()) {
+		result = self.~cause;
+	} else if(not self.getPorts().isEmpty()) {
+		if (self.getEvent().isTypeOf(SysML!TimeEvent)) {
+			result = "Omission of Input";
+		} else {
+			var states = self.getTriggerSourceEvents();
+			for (state in states) {
+				result = state.eContainer.eContainer.name + "::" + state.name;
+				if (hasMore) {
+					result += ", ";
+				}
+			}
+		}
+	} else {
+		result = "Internal failure";
+	}
+	return result;
+}
+
+operation SysML!Class getCause() {
+	return "Internal failure";
+}
+
+operation SysML!Trigger isContainedInStatemachine(stateMachine) {
+	return self.eContainer().containingStateMachine() == stateMachine;
+}
+
+operation SysML!Trigger isFailure() {
+	return self.eContainer().hasStereotype("DaStep");
+}
+
+operation SysML!Trigger getLocalEffect() : String {
+	var basic = self.getCFTABySysMLElement();
+	var effects = basic.getFailureModeLocalEffect();
+	var result = "";
+	for(effect in effects) {
+		var src = effect.getSysMLByCFTAElement();
+		result = result.concat(src.name);
+		if(hasMore) {
+      		result = result.concat(",&#13;");
+      	}
+	}
+	return result;
+}
+
+operation SysML!Class getLocalEffect() : String {
+	return "NA";
+}
+
+operation SysML!Trigger getSystemEffect() {
+    var result = "";
+    var sfta = self.getSFTAElement();
+    var effects = sfta.getFailureModeSystemEffect();
+    for (effect in effects) {
+      var cfta = effect.getCFTABySFTAElement();
+      var eff = cfta.getSysMLByCFTAElement();
+      result = result.concat(eff.name);
+      if(hasMore) {
+      	result = result.concat(",&#13;");
+      }
+    }
+    if (result.length() == 0) {
+        result = "Error!";
+    }
+    return result;
+}
+
+operation SysML!Class getSystemEffect() {
+    var result = "";
+    var sfta = self.getBlockByClass().getEMFTAByCFTAElement();
+    var effects = sfta.getFailureModeSystemEffect();
+    for (effect in effects) {
+      var cfta = effect.getCFTABySFTAElement();
+      if (cfta.isUndefined()) {
+      	result = effect.name.concat(" Failure");
+      } else {
+	      var eff = cfta.getSysMLByCFTAElement();
+	      result = result.concat(eff.name);
+      }
+      if(hasMore) {
+      	result = result.concat(",&#13;");
+      }
+    }
+    if (result.length() == 0) {
+        result = "Error!";
+    }
+    return result;
+}
+
+operation Any getSFTAElement() {
+  var cfta = self.getCFTABySysMLElement();
+  if(cfta.isDefined()) {
+    return cfta.getEMFTAByCFTAElement();
+  } else if(self.eContainer().isDefined() and self.eContainer().isTypeOf(SysML!Transition)) {
+    return self.eContainer().getSFTAElement();
+  }
+}
+
+operation Any hasStereotype(name: String): Boolean {
+	return self.getAppliedStereotypes().exists(s: SysML!Stereotype | s.name = name);
+}
+
+operation Any getStereotypeAttribute(stereoTypeName: String, attributeName: String): Any {
+	var stereotype = self.getAppliedStereotypes().selectOne(s: SysML!Stereotype | s.name = stereoTypeName);
+	if(stereotype.isDefined()) {
+		if(stereotype.getAllAttributes().selectOne(attribute | attribute.name = attributeName).isDefined()){
+			return self.getValue(stereotype, attributeName);
+		} else {
+			("Attribute: " + attributeName + " from stereotype: " +stereoTypeName + " not found in: " + self).println();
+			return;
+		}
+	} else {
+		("Stereotype: " +stereoTypeName + " not found in: " + self).println();
+		return;
+	}
+}
+
+/*
+	Cross model
+*/
+@cached
+operation getEcoreUtil() {
+    var ecoreUtil;
+    if(not ecoreUtil.isDefined()) {
+        var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+        ecoreUtil = emfTool.ecoreUtil;
+    }
+    return ecoreUtil;
+}
+
+@cached
+operation Any getCFTABySysMLElement() :Any {
+	var target = TRACE!TraceLink.all.selectOne(link | getEcoreUtil().equals(self, link.source)).targets.first();
+	return target;
+}
+
+@cached
+operation Any getEMFTAByCFTAElement() :Any {
+    var target = TRACESec!TraceLink.all.selectOne(link | getEcoreUtil().equals(self, link.source)).targets.first();
+    return target;
+}
+
+@cached
+operation Any getCFTABySFTAElement() :Any {
+    var link = TRACESec!TraceLink.all.selectOne(link | 
+                        link.targets.exists(trgt | getEcoreUtil().equals(self, trgt) ));
+    if(link.isUndefined()) {
+        ("Element not found: " + self).println();
+        return;
+    }
+    return link.source;
+}
+
+@cached
+operation Any getSysMLByCFTAElement() :Any {
+    var traceLink = TRACE!TraceLink.all.selectOne(link | 
+                        link.targets.exists(trgt | getEcoreUtil().equals(self, trgt) ));
+    var org = getAllSysMLContent().selectOne(x | getEcoreUtil().equals(traceLink.source, x));
+    return org; 
+}
+
+@cached
+operation getAllSysMLContent() {
+    return SysML!Model.all().asSequence().closure(x | x.eContents());
+}
+
+/*
+    FT events
+*/
+
+operation EMFTA!Event isBasicEvent() {
+    return self.gate.isDefined();
+}
+
+operation EMFTA!Event isRootEvent() {
+    return not self.eContainer().events.exists(x | x.gate.isDefined() and x.gate.events.includes(self));
+}
+
+operation EMFTA!Event getAllParentEvents() {
+    return self.eContainer().events.select(ev | ev.gate.isDefined() and ev.gate.events.includes(self));
+}
+
+operation CFTA!Event isRootEvent() {
+    return not self.eContainer().events.exists(x | x.gate.isDefined() and x.gate.events.includes(self));
+}
+
+operation CFTA!Event getAllParentEvents() {
+    return self.eContainer().events.select(ev | ev.gate.isDefined() and ev.gate.events.includes(self));
+}
+
+// System effect is the system top failure events
+operation EMFTA!Event getFailureModeSystemEffect() {
+	var top : OrderedSet;
+	var parentEvents = self.getAllParentEvents();
+	// If has no parents, this is a root event, return it
+	if(not parentEvents.isDefined() or parentEvents.size() < 1) {
+		top.add(basicEvent);
+		return top;
+	}
+	
+	// Loop through all parents
+	for(parent in parentEvents) {
+		// If this is root, add it to tops list
+		if ( parent.isRootEvent() ) {
+      		top.add(parent);
+		}
+    	// If not a root, get its parents and go through them
+		else {
+			var interParentEvents = parent.getFailureModeSystemEffect();
+	        if(interParentEvents.isDefined() and interParentEvents.size() > 0) {
+	          for ( p in interParentEvents) {
+	            top.add(p);
+	          }
+	        }
+		}
+	}
+	return top;
+}
+
+
+// System effect is the system top failure events
+operation CFTA!Event getFailureModeLocalEffect() {
+	var top : OrderedSet;
+	var parentEvents = self.getAllParentEvents();
+	// If has no parents, this is a root event, return it
+	if(not parentEvents.isDefined() or parentEvents.size() < 1) {
+		top.add(basicEvent);
+		return top;
+	}
+	
+	// Loop through all parents
+	for(parent in parentEvents) {
+		// If this is root, add it to tops list
+		if ( parent.isRootEvent() ) {
+      		top.add(parent);
+		}
+    	// If not a root, get its parents and go through them
+		else {
+			var interParentEvents = parent.getFailureModeLocalEffect();
+	        if(interParentEvents.isDefined() and interParentEvents.size() > 0) {
+	          for ( p in interParentEvents) {
+	            top.add(p);
+	          }
+	        }
+		}
+	}
+	return top;
+}
+
+operation SysML!Class hasFailureBehaviour () : Boolean {
+	return self.classifierBehavior.isDefined()
+			and self.classifierBehavior.hasFailureBehaviour();
+}
+
+operation SysML!StateMachine hasFailureBehaviour () : Boolean {
+	return self.region.subvertex.first().exists(vertex | 
+		vertex.isTypeOf(SysML!State) 
+		and vertex.hasStereotype("DaStep"));
+}
+
+operation SysML!Class getBlockByClass () : SysML!Block {
+	return SysML!Block.allOfType.selectOne(block | block.base_Class = self);
+}
+
+operation SysML!Trigger getTriggerSourceEvents () : Set(SysML!State) {
+	("Trigger: " + self ).println();
+	var resultStates :Set(SysML!State);
+	var resultEvents :Set(CFTA!Event);
+	var transitions = SysML!Transition.all.select(transition | 
+		transition.getEffect().isDefined() 
+		and transition.getEffect().isTypeOf(SysML!Activity));
+	var sourceEnds = getTriggerPortMatchingConnectorSourceEnd( self.getPorts().first());
+	for (sourceEnd in sourceEnds) {
+		("sourcePart: " + sourceEnd.getPartWithPort()).println();
+		("sourcePort: " + sourceEnd.getRole()).println();
+		var sourcetrns = transitions.select(transition | 
+			not transition.effect.getOwnedElements().select(effect | 
+				effect.isTypeOf(SysML!SendSignalAction) 
+				and effect.onPort == sourceEnd.getRole()
+				and effect.signal = self.event.signal).isEmpty());
+		if (sourcetrns.isEmpty()) {
+			("does not have source transitions").println();
+		} else {
+			("sourcetrns: " + sourcetrns).println();
+			for (sourcetrn in sourcetrns) {
+				resultStates.addAll(SysML!State.all.select(state | state.incomings.includes(sourcetrn)));
+			}
+		}
+	}
+	return resultStates;
+}
+
+operation getTriggerPortMatchingConnectorSourceEnd (port: SysML!Port) : Set(SysML!Port) {
+	var connectors = SysML!Connector.all.select(connector | 
+		not connector.getEnds().isEmpty()
+		and connector.getKind() == SysML!ConnectorKind#assembly);
+	var sources : Set (SysML!Port);
+	for (connector in connectors) {
+		for (end in connector.getEnds()) {
+			if (end.getRole() = port) {
+				sources.add(connector.getEnds().selectOne(inEnd|inEnd <> end)); // Need to get other end role
+			}
+		}
+	}
+	return sources;
+}
+%]

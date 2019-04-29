@@ -1,0 +1,520 @@
+import "./helper.etl";
+
+pre {
+    "Starting transformation SysML to FT on component level".log();
+    CFTA.resource.useXmiIds = true;
+    // Constants
+    var COUNTER_UPDATE_EXPRESSION : String = "(.*)[++,--]";
+    
+    var allModels = SysML!Model.all();
+    var targetModel = allModels.first();
+    
+    if(allModels.size() > 2) {
+        targetModel = System.user.choose("Please select the model to be transformed", allModels);
+    }
+    
+    targetModel.log();
+}
+
+rule model2cfta
+    transform sysml : SysML!Model
+    to sys : CFTA!System  {
+    guard: (sysml = targetModel)
+        sys.name = sysml.name;
+}
+
+rule block2component
+    transform blk : SysML!Block
+    to cmp : CFTA!Component {
+    guard{
+        return (getModelElement(blk.base_class) = targetModel)
+            and ( blk.hasPorts() or blk.hasFailureBehaviour());
+    }
+    log("Block: " + blk.base_Class.name);
+    var base = blk.base_class;
+    cmp.name = base.name;
+    
+    if ( blk.hasPorts() ) {
+        for(part in blk.getPorts()){
+            cmp.ports.add(part.equivalent());
+        }
+    }
+    
+    if(base.classifierBehavior.isDefined()){
+        // Get the classifier Behavior (statemachine)
+        cmp.FTAModel = base.classifierBehavior.equivalent();
+    }
+    
+    var modelElement = getModelElement(base);
+    modelElement.equivalent().components.add(cmp);
+}
+
+@lazy
+rule port2port transform src : SysML!Port to trgt : CFTA!Port {
+    trgt.name=src.name;
+    trgt.dir=CFTA!Direction#Out;
+    var type = src.type; // The type of the port, which is a Class
+
+    log("ProxyPort: " + src.name);
+    if ( not type.isDefined() ) {
+        return;
+    }
+
+    var direction;
+    // Loop over all attributes of the typing class, where they should be FlowProperties specifying their direction 
+    for(attr in type.getAllAttributes()) {
+        // Exception thrown on this statement
+        // "Called feature direction on undefined object"
+        var dir = SysML!FlowProperty.all.selectOne(x | x.base_Property.qualifiedName.matches(attr.qualifiedName)).direction.asString();
+        var mapdir;
+        
+        if(dir.matches("in")) {
+            mapdir = CFTA!Direction#In;
+        } else if(dir.matches("out")) {
+            mapdir = CFTA!Direction#Out;
+        } else {
+            mapdir = CFTA!Direction#InOut;
+        }
+        
+        if(not direction.isDefined()) {
+            direction=mapdir;
+        } else if(direction<>mapdir) {
+            direction=CFTA!Direction#InOut;
+        }
+    }
+    
+    if(src.isConjugated()) {
+        if(direction = CFTA!Direction#In) {
+            direction=CFTA!Direction#Out;
+        } else if(direction = CFTA!Direction#Out) {
+            direction=CFTA!Direction#In;
+        }
+    }
+        
+    trgt.dir=direction;
+}
+
+rule statemachine2fta transform sm : SysML!StateMachine to ft : CFTA!FTAModel {
+    guard: sm.hasFailureBehaviour()
+    log("StateMachine: " + sm.name);
+    ft.name = sm.name;
+}
+
+rule enterningfailurestate2event transform state : SysML!State to event : CFTA!Event {
+    guard { 
+        return state.hasStereotype("DaStep") 
+        and not state.isInternalIntermediateErrorJoin()
+        and not state.isRetryState();
+    }
+    
+    var ft = state.containingStateMachine().equivalent();
+    event.name = nameElementWithParent(state.name, ft.name);
+    event.gate= new CFTA!Gate;
+    event.gate.type = CFTA!GateType#OR;
+    event.probability = state.getPropFromDaStepAsDouble();
+    if (state.isIntermediateFailure()) {
+        var outgoings = state.getOutgoings().select(transition 
+            | transition.getTarget().isTypeOf(SysML!State)
+            and transition.getTarget().hasStereotype("DaStep"));
+        var states = outgoings.target;
+        log("states", states);
+        for (finalState in states) {
+            var parnetEvent = finalState.equivalent();
+            if (parnetEvent.gate.isUndefined()) {
+                parnetEvent.gate = new CFTA!Gate;
+                parnetEvent.gate.type = CFTA!GateType#AND;
+            }
+            parnetEvent.gate.events.add(event);
+        }
+    }
+    ft.events.add(event);
+    //log(event.name);
+}
+
+rule triggercomposit2basicevent transform trigger : SysML!Trigger to event : CFTA!Event {
+    guard {
+        var transition = trigger.eContainer();
+        return transition.hasStereotype("DaStep")
+            and transition.getTarget().isInternalIntermediateErrorJoin()
+            and transition.getSource().getContainer().getState().isDefined()
+            and transition.getSource().getContainer().getState().isComposite();
+    }
+    
+    // Required source elements
+    var transition = trigger.eContainer();
+    var triggerEvent = trigger.getEvent();
+    
+    // Required target elements
+    var ft = transition.containingStateMachine().equivalent();
+    var outgoingFailureTransitions = transition.getTarget().getOutgoings();
+    var msg :String = "A Internal Intermediate Error state can only have one outgoing failure transition";
+    validateSize(outgoingFailureTransitions, 1, msg);
+    var topEvent = outgoingFailureTransitions.first().getTarget().equivalent();
+    
+    // 1st, name the event
+    if(triggerEvent.isTypeOf(SysML!TimeEvent)) {
+        event.name =  nameElementWithParent(triggerEvent.name, ft.name + "::Timeout");
+    } else {
+        event.name =  nameElementWithParent(triggerEvent.name, ft.name);
+    }
+    
+    if(not trigger.getPorts().isEmpty()) {
+        // Currently, a trigger can be listening to one port only
+        validateSize(trigger.getPorts(), 1, "A trigger can be listening to one port only.");
+        event.name += " on " + trigger.getPorts().first().name;
+    }
+    event.probability = trigger.getPropFromDaStepAsDouble();
+    
+    // 2nd, add the event to the targetevent
+    topEvent.gate.events.add(event);
+    ft.events.add(event);
+}
+
+rule transitionlogic2interevent transform transition :SysML!Transition to event :CFTA!Event {
+    guard {
+        return transition.hasStereotype("DaStep")
+        and transition.trigger.isEmpty()
+        and transition.getGuard().isDefined()
+        and transition.source.isTypeOf(SysML!Pseudostate) 
+        and transition.source.getKind() = SysML!PseudostateKind#choice
+        and transition.getTarget().isTypeOf(SysML!State)
+        and transition.getTarget().hasStereotype("DaStep");
+    }
+    
+    // Required target elements
+    var ft = transition.containingStateMachine().equivalent();
+    var topEvent = transition.getTarget().equivalent();
+    
+    if ( isSimpleGuard (transition.getGuard())) {
+        event.name = nameElementWithParent(transition.getGuard().getSpecification().getBodies().first(), ft.name);
+    } else {
+        event.gate= new CFTA!Gate;
+        handleConstraint(event.gate, transition.getGuard());
+        event.name = nameElementWithParent(event.gate.type.name, ft.name);
+    }
+
+    event.probability = transition.getPropFromDaStepAsDouble();
+    // 2nd, add the event to the targetevent
+    topEvent.gate.events.add(event);
+    ft.events.add(event);
+}
+
+rule regiontrigger2basicevent transform trigger : SysML!Trigger to event : CFTA!Event {
+    guard {
+        var transition = trigger.eContainer();
+        return transition.hasStereotype("DaStep")
+            and transition.getTarget().isTypeOf(SysML!FinalState)
+            and transition.source.getContainer().getState().isDefined()
+            and transition.source.getContainer().getState().isComposite();
+    }
+    // get FTAModel
+    var transition = trigger.eContainer();
+    var ft = transition.containingStateMachine().equivalent();
+    
+    // 1st, name the event
+    var triggerEvent = trigger.getEvent();
+    if(triggerEvent.isTypeOf(SysML!TimeEvent)) {
+        event.name =  nameElementWithParent(triggerEvent.name, ft.name + "::Timeout");
+    } else {
+        event.name =  nameElementWithParent(triggerEvent.name, ft.name);
+    }
+    
+    if(not trigger.getPorts().isEmpty()) {
+        // Currently, a trigger can be listening to one port only
+        validateSize(trigger.getPorts(), 1, "A trigger can be listening to one port only.");
+        event.name += " on " + trigger.getPorts().first().name;
+    }
+    event.probability = trigger.getPropFromDaStepAsDouble();
+    
+    // 2nd, add the event to the targetevent
+    var outgoingTransitions = transition.source.getContainer().getState().getOutgoings()
+                                    .select(x | x.trigger.isEmpty() and not x.getGuard().isDefined());
+    var msg :String = "A composite state containing failure transitions/triggers can only have one outgoing transition";
+    validateSize(outgoingTransitions, 1, msg);
+    var decision = outgoingTransitions.first().target;
+    for(outrns in decision.getOutgoings().select(x | x.hasStereotype("DaStep"))) {
+        var topEvent = outrns.equivalent();
+        topEvent.gate.events.add(event);
+    }
+
+    // 3rd, add event to FTAModel
+    ft.events.add(event);
+}
+
+// #5: Pattern 3A
+rule join2and transform join : SysML!Pseudostate to andtrgt : CFTA!Event {
+    guard {
+        return join.getKind() = SysML!PseudostateKind#join
+        and join.getOutgoings().size() == 1
+        and join.getOutgoings().first().hasStereotype("DaStep")
+        and join.getOutgoings().first().getTarget().isTypeOf(SysML!State)
+        and join.getOutgoings().first().getTarget().hasStereotype("DaStep");
+    }
+
+    // Required target elements
+    var ft = join.containingStateMachine().equivalent();
+    var topEvent = join.getOutgoings().first().getTarget().equivalent();
+    
+    andtrgt.name = nameElementWithParent("AND", ft.name);
+    andtrgt.gate= new CFTA!Gate;
+    andtrgt.gate.type = CFTA!GateType#AND;
+    andtrgt.probability = join.getOutgoings().first().getPropFromDaStepAsDouble();
+    // 2nd, add the event to the targetevent
+    topEvent.gate.events.add(andtrgt);
+    ft.events.add(andtrgt);
+}
+
+// #6: Pattern 4A
+rule errorTransition2event transform trigger : SysML!Trigger to event :CFTA!Event {
+    guard {
+        var transition = trigger.eContainer();
+        return transition.hasStereotype("DaStep")
+        and transition.source.isTypeOf(SysML!State) 
+        and transition.source.hasStereotype("DaStep")
+        and transition.target.isTypeOf(SysML!State)
+        and transition.target.hasStereotype("DaStep");
+    }
+    ("failureTransition2event: " + trigger.name).println();
+    var transition = trigger.eContainer();
+    // Required target elements
+    var ft = transition.target.containingStateMachine().equivalent();
+    var topEvent = transition.target.equivalent();
+    
+    event.name = nameElementWithParent(trigger.event.name, ft.name);
+    event.probability = trigger.getPropFromDaStepAsDouble();
+    
+    topEvent.gate.type = CFTA!GateType#AND;
+    // 2nd, add the event to the targetevent
+    topEvent.gate.events.add(event);
+    ft.events.add(event);
+}
+
+rule transitionRetry2event transform trigger : SysML!Trigger to events : Sequence(EMFTA!Event) {
+    guard {
+        var transition = trigger.eContainer();
+        return transition.hasStereotype("DaStep")
+        and hasCounterEffect(transition.getEffect())
+        and transition.target.isTypeOf(SysML!State)
+        and transition.target.hasStereotype("DaStep");
+    }
+    var transition = trigger.eContainer();
+    // Required target elements
+    var ft = transition.containingStateMachine().equivalent();
+    var topEvent = transition.getTransitionRetryFailureState().equivalent();
+    
+    ("transitionFeedback2event: " + trigger.name).println();
+    var transition = trigger.eContainer();
+    var target = transition.target;
+    var counter:Integer;
+    for(inTransition in target.outgoings) {
+        if(inTransition.target <> target) {
+            var inCounter = getGuardMatchingEffect(inTransition, transition.effect.getBodies().first());
+            if(inCounter.isDefined() and inCounter.isInteger()) {
+                counter = inCounter.asInteger();
+                break;
+            }
+        }
+    }
+    
+    if (counter > 0) {
+        var parent = topEvent;
+        if ( counter > 1 ) {
+            parent = new CFTA!Event;
+            parent.name = nameElementWithParent('AND', ft.name);
+            parent.gate = new CFTA!Gate;
+            parent.gate.type = CFTA!GateType#AND;
+            topEvent.gate.events.add(parent);
+            events.add(parent);
+        }
+        for (i in Sequence{1..counter}) {
+            var event = new CFTA!Event;
+            var name = trigger.event.name + '[' + i + ']';
+            event.name = nameElementWithParent(name, ft.name);
+            event.probability = trigger.getPropFromDaStepAsDouble();
+            parent.gate.events.add(event);
+            events.add(event);
+        }
+        ft.events.addAll(events);
+    }
+}
+
+rule trigger2failureevent transform trigger : SysML!Trigger to event : CFTA!Event {
+    guard {
+        var transition = trigger.eContainer();
+        return transition.hasStereotype("DaStep")
+            and transition.getTarget().isTypeOf(SysML!State)
+            and transition.getTarget().hasStereotype("DaStep")
+            and not transTrace.transformations.exists(t | t.getSource() == trigger);
+    }
+    
+    // Required source elements
+    var transition = trigger.eContainer();
+    var triggerEvent = trigger.getEvent();
+    
+    // Required target elements
+    var ft = transition.containingStateMachine().equivalent();
+    var topEvent = transition.getTarget().equivalent();
+    
+    // 1st, name the event
+    if(triggerEvent.isTypeOf(SysML!TimeEvent)) {
+        event.name =  nameElementWithParent(triggerEvent.name, ft.name + "::Timeout");
+    } else {
+        event.name =  nameElementWithParent(triggerEvent.name, ft.name);
+    }
+    
+    if(not trigger.getPorts().isEmpty()) {
+        // Currently, a trigger can be listening to one port only
+        validateSize(trigger.getPorts(), 1, "A trigger can be listening to one port only.");
+        event.name += " on " + trigger.getPorts().first().name;
+    }
+    event.probability = trigger.getPropFromDaStepAsDouble();
+    
+    if (topEvent.gate.type <> CFTA!GateType#OR) {
+        var temp = topEvent.gate.events.selectOne(event | event.gate.isDefined() and event.gate.type = CFTA!GateType#OR);
+        if (temp.isDefined()) {
+            topEvent = temp;
+        } else {
+            var newIntermediateEvent = new CFTA!Event;
+            newIntermediateEvent.name = "OR";
+            newIntermediateEvent.gate = new CFTA!Gate;
+            topEvent.gate.events.add(newIntermediateEvent);
+            ft.events.add(newIntermediateEvent);
+            topEvent = newIntermediateEvent;
+        }
+    }
+    
+    // 2nd, add the event to the targetevent
+    topEvent.gate.events.add(event);
+    // 3rd, add the event to the ft model
+    ft.events.add(event);
+    log("Event: " + event.name);
+}
+
+/*********************************
+ *  Operations                 *
+ *********************************/
+ 
+operation handleConstraint(gate :CFTA!Gate, constraint : SysML!Constraint) {
+    // Constants
+    var LOGICAL_EXPRESSION_OR : String = "(.*) or (.*)";
+    var LOGICAL_EXPRESSION_AND : String = "(.*) and (.*)";
+    var LOGICAL_EXPRESSION_XOR : String = "(.*) xor (.*)";
+    
+    var constraintEquivalentDebug : String ; // For debugging purposes only
+    
+    // Only handling constraints defined as OpaqueExpression
+    var opaqueExpression = constraint.getSpecification();
+    validateType(opaqueExpression, SysML!OpaqueExpression, "Guard/Constraint should be of type SysML!OpaqueExpression");
+    
+    validateSize(opaqueExpression.getBodies(), 1, "Invalid number of expressions in transition guard");
+    var expression = opaqueExpression.getBodies().first();
+    
+    // 1st: Check if the expression is AND or OR expression, to set the gate accordingly
+    if (expression.toLowerCase().matches(LOGICAL_EXPRESSION_OR)){
+        gate.type = CFTA!GateType#OR;
+    } else if (expression.toLowerCase().matches(LOGICAL_EXPRESSION_AND)){ 
+        gate.type = CFTA!GateType#AND;
+    } else if (expression.toLowerCase().matches(LOGICAL_EXPRESSION_XOR)){ 
+        gate.type = CFTA!GateType#XOR;
+    }
+}
+
+operation isSimpleGuard (constraint : SysML!Constraint) : Boolean {
+    var result:Boolean = false;
+    // Constants
+    var LOGICAL_EXPRESSION : String = "(.*)=(.*)[true,false]";
+    
+    var constraintEquivalentDebug : String ; // For debugging purposes only
+    
+    // Only handling constraints defined as OpaqueExpression
+    var opaqueExpression = constraint.getSpecification();
+    validateType(opaqueExpression, SysML!OpaqueExpression, "Guard/Constraint should be of type SysML!OpaqueExpression");
+    
+    validateSize(opaqueExpression.getBodies(), 1, "Invalid number of expressions in transition guard");
+    var expression = opaqueExpression.getBodies().first();
+    
+    // 1st: Check if the expression is AND or OR expression, to set the gate accordingly
+    if (expression.toLowerCase().matches(LOGICAL_EXPRESSION)){
+        result = true;
+    }
+    return result;
+}
+ 
+operation getModelElement(blk: Any) : SysML!Model {
+    if(not blk.isKindOf(SysML!EObject)){
+        return;
+    }
+    if(blk.eContainer().isTypeOf(SysML!Model)) {
+        return blk.eContainer(); 
+    } else {
+        return getModelElement(blk.eContainer());
+    }
+}
+
+operation SysML!State isInternalIntermediateErrorJoin(): Boolean {
+    return self.hasStereotype("DaStep")
+        and self.getOutgoings().size() == 1
+        and self.getOutgoings().first().getTarget().isTypeOf(SysML!Pseudostate)
+        and self.getOutgoings().first().getTarget().getKind() = SysML!PseudostateKind#join;
+}
+
+operation SysML!State isIntermediateFailure(): Boolean {
+    return self.getOutgoings().notEmpty()
+        and self.getOutgoings().exists(transition 
+            | transition.getTarget().isTypeOf(SysML!State)
+            and transition.getTarget().hasStereotype("DaStep"));
+}
+
+operation SysML!State isRetryState(): Boolean {
+    return self.getOutgoings().notEmpty()
+        and self.getOutgoings().exists(transition 
+            | transition.getTarget().isTypeOf(SysML!State)
+            and transition.getTarget().hasStereotype("DaStep")
+            and not transition.hasStereotype('DaStep'));
+}
+
+operation SysML!Transition getTransitionRetryFailureState(): SysML!State {
+    var target = self.target;
+    var completeFailureTranstion = target.outgoings.selectOne(transition 
+        | transition.getTarget().isTypeOf(SysML!State)
+        and transition.getTarget().hasStereotype("DaStep"));
+        //and not transition.hasStereotype('DaStep'));
+    return completeFailureTranstion.getTarget();
+}
+
+operation hasCounterEffect (effect : Any) : Boolean {
+    if(not effect.isDefined() or not effect.isTypeOf(SysML!OpaqueBehavior)) {
+        return false;
+    }
+
+    validateSize(effect.getBodies(), 1, "Invalid number of expressions in transition guard");
+    var expression = effect.getBodies().first();
+    if (expression.toLowerCase().matches(COUNTER_UPDATE_EXPRESSION)){
+        return true;
+    }
+    return false;
+}
+
+operation getGuardMatchingEffect (transition, effectCounter) : Any {
+    var constraint = transition.getGuard();
+    if (not constraint.isDefined() or not constraint.isTypeOf(SysML!Constraint)) {
+        return ;
+    }
+    
+    // Only handling constraints defined as OpaqueExpression
+    var opaqueExpression = constraint.getSpecification();
+    validateType(opaqueExpression, SysML!OpaqueExpression, "Guard/Constraint should be of type SysML!OpaqueExpression");
+    
+    validateSize(opaqueExpression.getBodies(), 1, "Invalid number of expressions in transition guard");
+    var expression = opaqueExpression.getBodies().first();
+    
+    // -2 for the ++ or --
+    // this is to get the counter name 
+    var counter = effectCounter.subString(0, effectCounter.length()-2).trim();
+    if (expression.toLowerCase().matches(counter.concat("(.*)[<](.*)"))){
+        return expression.split('<')[1].trim();
+    } else if (expression.toLowerCase().matches(counter.concat("(.*)[>](.*)"))){
+        return expression.split('>')[1].trim();
+    }
+    return ;
+}

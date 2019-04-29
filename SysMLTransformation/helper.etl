@@ -1,0 +1,201 @@
+
+post {
+	log("Finishing transformation");
+	// Store traceability links in custom model
+	var trace : new Trace!Trace;
+	for (t in transTrace.transformations) {
+		var link : new Trace!TraceLink;
+		link.source = t.getSource();
+		// This if is added to handle the case of transforming one-to-many (oneSource-to-targetSequence)
+		if(t.getTargets().first().isKindOf(Collection)) {
+			link.targets.addAll(t.getTargets().first());
+		} else {
+			link.targets = t.getTargets();
+		}
+		link.ruleName = t.getRule().name;
+		link.index = loopCount;
+		trace.links.add(link);
+	}
+}
+
+/*
+ * Output and logging methods 
+ */
+// Override the builtin println() function
+operation Any println() : Any {
+	("" + self)->println();
+}
+
+// Override the builtin print() function
+operation Any print() : Any {
+	("" + self)->print();
+}
+
+operation Any log() {
+	self.println();
+}
+
+operation log(collection : Collection) {
+	log("Printing list:");
+	var i :Integer = 0;
+	for(obj in collection) {
+		("i:" + i + ":").print();
+		(obj).println();
+		i++;
+	}
+}
+
+operation log(msg: String, collection : Collection) {
+	log("Printing list: " + msg);
+	var i :Integer = 0;
+	for(obj in collection) {
+		("i:" + i + ":").print();
+		(obj).println();
+		i++;
+	}
+}
+
+operation log(obj :Any) {
+	obj.log();
+}
+
+/*
+ * Generic methods help in the transformation
+ */
+operation Any hasStereotype(name: String): Boolean {
+	return self.getAppliedStereotypes().exists(s: SysML!Stereotype | s.name = name);
+}
+
+operation SysML!Block hasStereotype(name: String): Boolean {
+	return self.base_class.getAppliedStereotypes().exists(s: SysML!Stereotype | s.name = name);
+}
+
+operation Any getStereotype(name: String): Any {
+	return self.getAppliedStereotypes().selectOne(s: SysML!Stereotype | s.name = name);
+}
+
+operation Any getStereotypeAttribute(stereoTypeName: String, attributeName: String): Any {
+	var prop = 0d;
+	var stereotype = self.getAppliedStereotypes().selectOne(s: SysML!Stereotype | s.name = stereoTypeName);
+	if(stereotype.isDefined()) {
+		if(stereotype.getAllAttributes().selectOne(attribute | attribute.name = attributeName).isDefined()){
+			prop = self.getValue(stereotype, attributeName);
+			if(prop = 1.0) {
+				prop = 0d;
+			}
+			return prop;
+		} else {
+			throw "Attribute: " + attributeName + " from stereotype: " +stereoTypeName + " not found in: " + self;
+		}
+	} else {
+		throw "Stereotype: " +stereoTypeName + " not found in: " + self;
+	}
+}
+
+operation Any getPropFromDaStepAsDouble() : Any {
+	return self.getStereotypeAttribute("DaStep", "prob").asDouble();
+}
+
+operation Any printAllContent() : Any {
+	("***Printing all content of: " + self.name).println();
+	
+	for( ele in self.getAllEelemts()){ 
+		ele.println();
+	}
+	"***Done printing all".println();
+}
+
+operation Any getAllElements() : Any {
+	return self.asSequence.closure(x | x.eContents());
+}
+
+operation nameElementWithParent(name: String, parent: String) : String {
+	return parent + "::" + name;
+}
+
+operation validateSize(obj :Any, limit :Integer, msg :String) {
+	if(obj.size() > limit) {
+		handleError(msg);
+	}
+}
+
+operation validateType(obj :Any, type :Any, msg :String) {
+	if(not obj.isTypeOf(type)) {
+		handleError(msg);
+	}
+}
+
+operation handleError(msg :String) {
+	throw msg;
+}
+
+operation extractOperand(expression :String) :String {
+	var LOGICAL_EXPRESSION_EQUAL : String =  "(.*)=(true|false)";
+	if (expression.trim().toLowerCase().matches(LOGICAL_EXPRESSION_EQUAL)) {
+        return expression.trim().split("=").first().trim();
+    } else {
+    	handleError("Unable to extract operand from string expression " + expression
+			+ ". Required format: " + LOGICAL_EXPRESSION_EQUAL);
+    }
+}
+
+operation SysML!Block hasPorts () : Boolean {
+	return self.base_Class.getOwnedAttributes().size > 0 
+			and self.base_Class.getOwnedAttributes().exists(attribute | 
+				attribute.getAggregation() == SysML!AggregationKind#composite
+				and attribute.isTypeOf(SysML!Port)
+				and attribute.hasStereotype("ProxyPort"));
+}
+
+operation SysML!Block getPorts () : Set {
+	return self.base_Class.getOwnedAttributes().select(attribute | 
+				attribute.getAggregation() == SysML!AggregationKind#composite
+				and attribute.isTypeOf(SysML!Port)
+				and attribute.hasStereotype("ProxyPort"));
+}
+
+operation SysML!Block hasParts () : Boolean {
+	return self.base_Class.getOwnedAttributes().size > 0 
+			and self.base_Class.getOwnedAttributes().exists(attribute | 
+				attribute.getAggregation() == SysML!AggregationKind#composite
+				and attribute.isTypeOf(SysML!Property)
+				and attribute.type.isTypeOf(SysML!Class)
+				and attribute.type.hasStereotype("Block"));
+}
+
+operation SysML!Block hasFailureBehaviour () : Boolean {
+	return self.base_Class.hasFailureBehaviour();
+}
+
+operation SysML!Class hasFailureBehaviour () : Boolean {
+	return self.classifierBehavior.isDefined()
+			and self.classifierBehavior.hasFailureBehaviour();
+}
+
+operation SysML!StateMachine hasFailureBehaviour () : Boolean {
+	return self.region.subvertex.first().exists(vertex | 
+		vertex.isTypeOf(SysML!State) 
+		and vertex.hasStereotype("DaStep"));
+}
+
+operation SysML!Class getBlockByClass () : SysML!Block {
+	return SysML!Block.allOfType.selectOne(block | block.base_Class = self);
+}
+
+operation getTransitionPrintable(trn) :String{
+	var result = "";
+	result += "Transition:";
+	var sm = getStatemachine(trn);
+	result += sm.name + ":";
+	result += trn.source.name + ":";
+	result += trn.target.name;
+	return result;
+}
+
+operation getStatemachine(ele) {
+	if(ele.eContainer.isDefined() and ele.eContainer.isTypeOf(SysML!StateMachine)) {
+		return ele.eContainer; 
+	} else {
+		return getStatemachine(ele.eContainer);
+	}
+}

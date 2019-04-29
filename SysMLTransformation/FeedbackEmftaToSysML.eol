@@ -1,0 +1,233 @@
+
+var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+var ecoreUtil = emfTool.ecoreUtil;
+var allSysMLContent = SysML!Model.all().asSequence().closure(x | x.eContents());
+var components = CFTA!Component.all.select(component | component.FTAModel.isDefined()).FTAModel;
+
+for(component in components){
+	var path :String = component.eResource().getURI().toString();
+	var newPath :String = path.replace("ComponentFTModel-v2.model","components/");
+	var uri :String = newPath.concat("comp-").concat(component.name).concat(".emfta#/");
+	uri.println("uri: ");
+	var ftamodel = emfTool.getEObject(uri);
+	(""+component).println();
+	crossModelCFTASysML(ftamodel);
+}
+
+"******2******".println();
+crossModelEMFTASysML();
+"******3******".println();
+"Done.".println();
+
+operation crossModelCFTASysML(emftamodel) {
+	for (ele in emftamodel.events) {
+		("cfta1: " + ele).println();
+		if (ele.probability = 0) {
+			"Event prop is 0".println();
+			continue;
+		}
+		if (ele.isTransitionalEvent()) {
+			("Skipping: " + ele.name).println();
+			continue;
+		}
+		var src = ele.getSysMLSourceElement();
+		if (src.isUndefined()) {
+			("No SysML Element Equivalent to Event: " + ele).println();
+			continue;
+		}
+		
+		if (src.isJoinNode()) {
+			src = src.getOutgoings().first();
+		}
+		
+		src.println("sysml1: ");
+		var prop = src.getStereotypeAttribute("DaStep","prob").asDouble();
+		("prob : " + prop).println();
+		if (prop <> ele.probability){
+			var stereotype = src.getAppliedStereotypes().selectOne(s: SysML!Stereotype | s.name = "DaStep");
+			var result =  src.setValue(stereotype, "prob", ele.probability.asString());
+		}
+		
+		checkParent(src);
+	}
+}
+
+// Retrieve root sysml elements for ever emfta element 
+operation crossModelEMFTASysML() {
+	for(ele in EMFTA!Event.all){
+		("emfta2: " + ele).println();
+		if (ele.isTransitionalEvent()) {
+			("Skipping: " + ele.name).println();
+			continue;
+		}
+		var cfta = ele.getSourceElement();
+		("cfta2 : " + cfta).println();
+		var src;
+		if (cfta.isUndefined()) {
+			src = ele.getSourceElement();
+		} else {
+		  src = cfta.getSysMLSourceElement();
+		}
+		src.println("sysml2: ");
+		if (src.isUndefined()) {
+			continue;
+		}
+		if(src.getStereotypeAttribute("DaStep","prob").isDefined()) {
+			var prop = src.getStereotypeAttribute("DaStep","prob").asDouble();
+			if(prop <> ele.probability){
+				var stereotype = src.getAppliedStereotypes().selectOne(s: SysML!Stereotype | s.name = "DaStep");
+				var result =  src.setValue(stereotype, "prob", ele.probability.asString());
+				stereotype = src.getAppliedStereotypes().selectOne(s: SysML!Stereotype | s.name = "DaStep");
+			}
+
+			checkParent(src);
+		}
+	}
+}
+
+operation Any getStereotypeAttribute(stereoTypeName: String, attributeName: String): Any {
+	var stereotype = self.getAppliedStereotypes().selectOne(s: SysML!Stereotype | s.name = stereoTypeName);
+	if(stereotype.isDefined()) {
+		if(stereotype.getAllAttributes().selectOne(attribute | attribute.name = attributeName).isDefined()){
+			return self.getValue(stereotype, attributeName);
+		} else {
+			("---Attribute: " + attributeName + " from stereotype: " +stereoTypeName + " not found in: " + self).println();
+			return;
+		}
+	} else {
+		self.eContainer().println();
+		if(self.eContainer().isTypeOf(SysML!Transition)) {
+			self.eContainer().target.println();
+		}
+		("---Stereotype: " +stereoTypeName + " not found in: " + self).println();
+		return;
+	}
+}
+
+// Invoked by a CFTA element to get a SysML element
+@cached
+operation Any getSourceElement() :Any {
+	var link = SecTRACE!TraceLink.all.selectOne(link | 
+		link.targets.exists(trgt | self.extendedEqual(trgt)));
+	if(link.isUndefined()) {
+		throw "Element: " + slef + " was not found";
+	}
+	return link.source;
+}
+
+// Takes an event of Event from splitted component files
+// return SysML element
+@cached
+operation Any getSysMLSourceElement() :Any {
+	var traceLink = Trace!TraceLink.all.selectOne(link | 
+						link.targets.exists(trgt | self.extendedEqual(trgt)));
+	if (traceLink.isUndefined()) {
+		("getSysMLSourceElement: " + traceLink).println();
+		return;
+	}
+	var org = allSysMLContent.selectOne(x | x.extendedEqual(traceLink.source));
+	return org;	
+}
+
+operation checkParent(src) {
+	var parentTransition = src.eContainer();
+	if (parentTransition.isTypeOf(SysML!Transition)) {
+		var stereotype = parentTransition.getAppliedStereotypes().selectOne(s: SysML!Stereotype | s.name = "DaStep");
+		getTransitionPrintable(parentTransition).println();
+		if (stereotype.isDefined()) {
+			var parProb = parentTransition.getStereotypeAttribute("DaStep","prob").asDouble();
+			var triggers = parentTransition.getTriggers();
+			var transProb = 0.asDouble();
+			for (trgr in triggers) {
+				var trgrProb = trgr.getStereotypeAttribute("DaStep","prob").asDouble();
+				("trgrProb : " + trgrProb ).println();
+				("transProb : " + transProb ).println();
+				if ( trgrProb > 0 and trgrProb < 1) {
+					transProb = transProb + trgrProb;
+				}
+				("transProb : " + transProb ).println();
+			}
+			if (transProb > 0 and transProb < 1) {
+				("transProb : " + transProb ).println();
+				parentTransition.owningModel().println();
+				var result = parentTransition.setValue(stereotype, "prob", transProb.asString());
+				parentTransition.getStereotypeAttribute("DaStep","prob").println();
+				ecoreUtil.getURI(parentTransition).println(); 
+			} else {
+				("Calculated parent prob: " + transProb).println();
+			}
+		} else {
+			"Not defined.".println();
+		}
+		if(parentTransition.target.isInternalIntermediateErrorJoin()) {
+			var parProb = parentTransition.getStereotypeAttribute("DaStep","prob").asDouble();
+			parentTransition.target.setValue(stereotype, "prob", parProb.asString());
+			"internal failure state update".println();
+		}
+	} else {
+		("Container: " + parentTransition).println();
+	}
+}
+
+operation getTransitionPrintable(trn) :String{
+	var result = "";
+	result += "Transition:";
+	var sm = getStatemachine(trn);
+	result += sm.name + ":";
+	result += trn.source.name + ":";
+	result += trn.target.name;
+	return result;
+}
+
+operation getStatemachine(ele) {
+	if(ele.eContainer.isDefined() and ele.eContainer.isTypeOf(SysML!StateMachine)) {
+		return ele.eContainer; 
+	} else {
+		return getStatemachine(ele.eContainer);
+	}
+}
+
+@cached
+operation Any extendedEqual(trgt:Any) : Boolean {
+	var selfXMIId = self.eResource().getURIFragment(self);
+	var targetXMIId = trgt.eResource().getURIFragment(trgt);
+	return (selfXMIId = targetXMIId);
+}
+
+operation Any isJoinNode() :Boolean {
+	return self.isTypeOf(SysML!Pseudostate)
+		and self.getKind() = SysML!PseudostateKind#join;
+}
+
+operation SysML!Trigger println(prefix :String) {
+	("Trigger: " + self.eContainer.source.name + "->" + self.name + "->" + self.eContainer.target).println(prefix);
+}
+
+operation SysML!Transition println(prefix :String) {
+	("Transition: " + self.source.name + "->" + self.name + "->" + self.target).println(prefix);
+}
+
+operation SysML!State isInternalIntermediateErrorJoin(): Boolean {
+	return self.getAppliedStereotypes().exists(s: SysML!Stereotype | s.name = "DaStep")
+		and self.getOutgoings().size() == 1
+		and self.getOutgoings().first().getTarget().isTypeOf(SysML!Pseudostate)
+		and self.getOutgoings().first().getTarget().getKind() = SysML!PseudostateKind#join;
+}
+
+function CFTA!Event isTransitionalEvent(): Boolean {
+	if(self.gate.isUndefined()) {
+		return false;
+	}
+	var validName = "::" + self.gate.type.name;
+	("validName: " + validName).println();
+	return self.name.endsWith(validName);
+}
+
+function EMFTA!Event isTransitionalEvent(): Boolean {
+	if(self.gate.isUndefined()) {
+		return false;
+	}
+	var validName = "::" + self.gate.type.name;
+	("validName: " + validName).println();
+	return self.name.endsWith(validName);
+}

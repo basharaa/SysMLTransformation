@@ -1,0 +1,593 @@
+import "./helper.etl";
+
+pre {
+  log("Starting transformation FT on component level to classical FT");
+  EMFTA.resource.useXmiIds = true;
+  var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+  var ecoreUtil = emfTool.ecoreUtil;
+}
+
+rule basicEventOnPort2SFTIntermediateEvent 
+  transform cftEvent :CFTA!Event 
+  to duplicateEvents :Set(EMFTA!Event) {
+  guard {
+    return cftEvent.isAtInternalPortTriggeringFailure ();
+  }
+  log("cftEvent: " + cftEvent);
+  
+  var parts = getComponentFTBlockInstances(cftEvent.eContainer().eContainer());
+  for (part in parts){
+      var srcEvents = cftEvent.getTraceSysMLElement().getTriggerSourceEvents(part);
+    var event = new EMFTA!Event;
+    event.name = part.name + "::" + cftEvent.name;
+    event.probability = cftEvent.probability;
+    event.~part = part;
+    for (srcEvent in srcEvents ) {
+      if (srcEvent.gate.isDefined() 
+        and srcEvent.gate.events.size() > 0) {
+        log(srcEvent);
+        event.gate = srcEvent.gate.getEquivalentGate();
+        for (innerEvent in srcEvent.gate.events) {
+          innerEvent.~part = srcEvent.~part;
+          var inners = innerEvent.equivalent();
+          log("innerevents:1 " + inners);
+          for (inner in inners) {
+            log("inner: " + inner);
+            log("inner.part: " + inner.~part);
+            log("srcEvent.part: " + srcEvent.~part);
+            if (inner.isDefined() and inner.~part = srcEvent.~part) {
+              event.gate.events.add(inner);
+            }
+          }
+        }
+      }
+    }
+    
+    duplicateEvents.add(event);
+    log("owner: " + part.getOwner().getBlockByClass());
+    var ownerFTAModel = part.getOwner().getBlockByClass().equivalent();
+    ownerFTAModel.events.add(event);
+  }
+  log("cftEvent2: " + cftEvent);
+  log("duplicateEvents : " + duplicateEvents);
+}
+
+rule cftEventNotAtPort2SFTEvent 
+  transform sourceEvent :CFTA!Event 
+  to duplicateEvents :Set(EMFTA!Event) {
+  guard {
+    return not sourceEvent.isAtInternalPortTriggeringFailure () 
+      and not sourceEvent.doesEventSendAtInternalPortTriggeringFailure ();
+  }
+
+  log("sourceEvent: " + sourceEvent);
+  log("sourceEvent.part: " + sourceEvent.~part);
+  var parts = getComponentFTBlockInstances(sourceEvent.eContainer().eContainer());
+  for (part in parts){
+    var owner = part.getOwner().equivalent();
+    var event = new EMFTA!Event;
+    event.name = part.name + "::" + sourceEvent.name;
+    event.probability = sourceEvent.probability;
+    duplicateEvents.add(event);
+    event.~part = part;
+    if (sourceEvent.gate.isDefined() 
+      and sourceEvent.gate.events.size() > 0) {
+      event.gate = sourceEvent.gate.getEquivalentGate();
+      for (innerEvent in sourceEvent.gate.events ) {
+        var inners = innerEvent.equivalent();
+        log("innerevents:2 " + inners);
+        for (inner in inners) {
+          event.gate.events.add(inner);
+        }
+      }
+    }
+    
+    var ownerFTAModel = part.getOwner().getBlockByClass().equivalent();
+    ownerFTAModel.events.add(event);
+  }
+
+  log("sourceEvent2: " + sourceEvent);
+  log("duplicateEvents2 : " + duplicateEvents);
+}
+
+rule allocationSupplier2sftevent
+  transform block : SysML!Block
+  to event : EMFTA!Event {
+  guard {
+    return block.isAnAllocationSupplier() 
+      and not block.hasFailureBehaviour() 
+      and block.hasStereotype("DaComponent");
+  }
+
+  var prob = block.getFailureOccurrenceProb();
+  event.name = block.base_class.name + "Failure";
+  event.probability = prob;
+  log("allocationSupplier2sftevent: " + block.base_class);
+  var relevantAllocations : Sequence(SysML!Allocate) = SysML!Allocate.all.select(allocation | allocation.base_Abstraction.supplier.contains(block.base_class));
+  var clients = relevantAllocations.base_Abstraction.client; // Returns all client from all allocations in the list
+  for (client in clients.flatten().asSet()) {
+    if (client.hasFailureBehaviour()) {
+      var ftamodel = client.classifierBehavior.getCFTAElement().first().getEquivalent().first();
+      var topEvents = ftamodel.getFTAModelRootEvents();
+      for (topevent in topEvents) { 
+        var sftTopEvent = topevent.equivalent();
+        if(sftTopEvent.isDefined()) {
+          for (sftTopEventI in sftTopEvent) {
+            sftTopEventI.gate.events.add(event);
+            sftTopEventI.eContainer().events.add(event);
+          }
+        } else {
+          var siblings = topevent.gate.events.equivalent();
+            log("siblings: " + siblings);
+          for(sibling in siblings) {
+            log("sibling: " + sibling);
+            log("sibling: " + sibling.eContainer().events.select(event | event.gate.isDefined() and event.gate.events.exists(inevent|inevent = sibling) ));
+            var sftTopEvents = sibling.getParnetEventsByEvent();
+            log("sftTopEvent: " + sftTopEvents);
+            for (sftTopEventI in sftTopEvents) {
+              sftTopEventI.gate.events.add(event);
+              sftTopEventI.eContainer().events.add(event);
+            }
+          }
+        }
+      }
+    } else if (client.getBlockByClass().hasPorts()) {
+      var ports = client.getOwnedAttributes().select(attribute | 
+        attribute.getAggregation() == SysML!AggregationKind#composite
+        and attribute.isTypeOf(SysML!Port)
+        and attribute.hasStereotype("ProxyPort"));
+      for (port in ports) {
+        var itemFlows : Sequence(SysML!ItemFlow) = SysML!ItemFlow.all.select(itemFlow | itemFlow.base_InformationFlow.getInformationSources().contains(port));
+        for (itemFlow in itemFlows) {
+          var targetPort = itemFlow.base_InformationFlow.getInformationTargets().first();
+          var triggers = SysML!Trigger.all.select(trigger | 
+            trigger.hasStereotype("DaStep")
+            and not trigger.getPorts().isEmpty() 
+            and trigger.getPorts().contains(targetPort));
+          log("triggers: " + triggers);
+          for (trigger in triggers) {
+            var cftElement = trigger.getCFTAElement().first().getEquivalent();
+            log("cftElement: " + cftElement);
+            log("sftEvent: " + cftElement.first().equivalent());
+            var sftEvent = cftElement.first().equivalent().first();
+            if (sftEvent.gate.isUndefined()) {
+              sftEvent.gate = new EMFTA!Gate;
+            }
+            sftEvent.gate.events.add(event);
+            sftEvent.eContainer().events.add(event);
+          }
+        }
+      }
+    }
+  }
+}
+
+@lazy
+rule mainblock2sftmodel
+  transform block : SysML!Block
+  to ftamodel : EMFTA!FTAModel {
+  guard {
+    return block.hasParts() 
+      and not block.hasFailureBehaviour() 
+      and not block.base_Class.hasStereotype("DaComponent");
+  }
+  ftamodel.name = block.base_class.name;
+}
+
+rule blockWithFailureInfo2sftevent
+  transform block : SysML!Block 
+  to events : Set(EMFTA!Event) {
+  guard {
+    return not block.hasParts() 
+      and not block.hasFailureBehaviour() 
+      and block.hasStereotype("DaComponent")
+      and block.getBlockInstances().size() > 0;
+  }
+  var resourceMultiplicity = block.getResourceMultiplicity();
+  var minNumberOfResources = block.getMinNumberOfResources();
+  var prob = block.getFailureOccurrenceProb();
+  var instances = block.getBlockInstances();
+  
+  var ownerInstancesMap = instances.getInstancesGroupedByOwner();
+  for (owner in ownerInstancesMap.keySet()) {
+    var ftaModel = owner.equivalent();
+    var instancesSet = ownerInstancesMap.get(owner);
+    var rootEvents = ftaModel.getFTAModelRootEvents();
+    log(rootEvents);
+    log(instancesSet);
+    for (rootEvent in rootEvents) {
+      for (instance in instancesSet) {
+        if (resourceMultiplicity > 1) {
+          var intermediate = new EMFTA!Event;
+          intermediate.name = instance.name + " All Failure";
+          intermediate.gate = new EMFTA!Gate;
+          if (minNumberOfResources > 1) {
+            intermediate.gate.type = EMFTA!GateType#OR;
+          } else {
+            intermediate.gate.type = EMFTA!GateType#AND;
+          }
+          var i :Integer = 1;
+          while ( i <= resourceMultiplicity) {
+            var basicEvent = new EMFTA!Event;
+            basicEvent.name = instance.name + i;
+            basicEvent.probability = prob;
+            intermediate.gate.events.add(basicEvent);
+            ftaModel.events.add(basicEvent);
+            i++;
+          }
+          rootEvent.gate.events.add(intermediate);
+          events.add(intermediate);
+          ftaModel.events.add(intermediate);
+        } else {
+          var basicEvent = new EMFTA!Event;
+          basicEvent.name = instance.name + " Failure";
+          basicEvent.probability = prob;
+          log("rootEvent: " + rootEvent);
+          rootEvent.gate.events.add(basicEvent);
+          events.add(basicEvent);
+          ftaModel.events.add(basicEvent);
+        }
+      }
+    }
+  }
+}
+
+rule blockAsSpareWithFailureInfo2sftevent
+  transform spare : SysML!Block 
+  to events : Set(EMFTA!Event) {
+  guard {
+    return not spare.hasParts() 
+      and not spare.hasFailureBehaviour() 
+      and spare.base_Class.hasStereotype("DaSpare")
+      and spare.getBlockInstances().size() > 0;
+  }
+  
+  var substitutions = spare.base_class.getSubstitutions();
+  if (substitutions.isUndefined() or substitutions.isEmpty()) {
+    return;
+  }
+  
+  var resourceMultiplicity = spare.getSpareResourceMultiplicity();
+  var prob = spare.getSpareFailureOccurrenceProb();
+  var i :Integer = 1;
+  log("resourceMultiplicity: " + resourceMultiplicity);
+  while ( i <= resourceMultiplicity) {
+    var basicEvent = new EMFTA!Event;
+    basicEvent.name = spare.base_class.name + " " + i + " Failure";
+    basicEvent.probability = prob;
+    events.add(basicEvent);
+    i++;
+  }
+  log("events");
+  log(events);
+  for (substitution in substitutions) {
+    var suppliers = substitution.supplier;
+    for (supplier in suppliers) {
+      var supplierEvents = supplier.getBlockByClass().equivalent();
+      for (supplierEvent in supplierEvents) {
+        if (supplierEvent.gate.isDefined()) {
+          supplierEvent.gate.events.addAll(events);
+        } else {
+          var intermediate = new EMFTA!Event;
+          intermediate.name = supplierEvent.name + " " + spare.base_class.name + " All Failure";
+          intermediate.gate = new EMFTA!Gate;
+          intermediate.gate.type = EMFTA!GateType#AND;
+          var parentEvents = supplierEvent.eContainer().events.select(event | event.gate.isDefined() and event.gate.events.includes(supplierEvent));
+          if (parentEvents.isDefined() and not parentEvents.isEmpty()) {
+            for (parentEvent in parentEvents) {
+              parentEvent.gate.events.remove(supplierEvent);
+              parentEvent.gate.events.add(intermediate);
+            }
+          }
+          intermediate.gate.events.add(supplierEvent);
+          intermediate.gate.events.addAll(events);
+          supplierEvent.eContainer().events.add(intermediate);
+        }
+        supplierEvent.eContainer().events.addAll(events);
+      }
+    }
+  }
+}
+
+operation SysML!Block isAnAllocationSupplier () : Boolean {
+  return SysML!Allocate.all.exists(allocation | allocation.base_Abstraction.supplier.contains(self.base_class));
+}
+
+operation EMFTA!Event getParnetEventsByEvent () : Set(EMFTA!Event) {
+  return  self.eContainer().events.select(event | event.gate.isDefined() and event.gate.events.includes(self));
+}
+
+operation SysML!Block getResourceMultiplicity () : Any {
+  return self.base_class.getStereotypeAttribute("DaComponent", "resMult");
+}
+
+operation SysML!Block getMinNumberOfResources () : Any {
+  return self.base_class.getStereotypeAttribute("DaComponent", "minNumberOfResources");
+}
+
+operation SysML!Block getFailureOccurrenceProb () : Any {
+  return self.base_class.getStereotypeAttribute("DaComponent", "failure.OccurrenceProb");
+}
+
+operation SysML!Block getSpareResourceMultiplicity () : Any {
+  var result = self.base_class.getStereotypeAttribute("DaSpare", "resMult");
+  if (result = 0) {
+    result = 1;
+  }
+  return result;
+}
+
+operation SysML!Block getSpareFailureOccurrenceProb () : Any {
+  return self.base_class.getStereotypeAttribute("DaSpare", "failure.OccurrenceProb");
+}
+
+operation EMFTA!FTAModel getFTAModelRootEvents () : Set(EMFTA!Event) {
+  var events = self.events.select(eventPrnt | 
+    not self.events.exists(event | event.gate.isDefined() and event.gate.events.includes(eventPrnt)));
+  log("events: " + events);
+  if(events.isUndefined() or events.isEmpty()) {
+    events = new Set;
+    var event = new EMFTA!Event;
+    event.name = self.name;
+    event.gate = new EMFTA!Gate;
+    events.add(event);
+    self.events.add(event); 
+  }
+  return events;
+}
+
+operation CFTA!FTAModel getFTAModelRootEvents () : Set(EMFTA!Event) {
+  var events = self.events.select(eventPrnt | 
+    not self.events.exists(event | event.gate.isDefined() and event.gate.events.includes(eventPrnt)));
+  log("events: " + events);
+  return events;
+}
+
+operation Set getInstancesGroupedByOwner () : Map {
+  var result :Map;
+  for (instance in self) {
+    var owner = instance.getOwner().getBlockByClass();
+    var instanceSet :Set;
+    if (not result.containsKey(owner)) {
+      instanceSet = new Set;
+      instanceSet.add(instance);
+      result.put(owner, instanceSet);
+    } else {
+      log("result:before: " + result);
+      result.get(owner).add(instance);
+      log("result:after: " + result);
+    }
+  }
+  return result;
+}
+
+// Check if the event was triggered on a port from another component 
+// and not delegated form outside 
+@cached
+operation CFTA!Event isAtInternalPortTriggeringFailure () : Boolean {
+  var result = false;
+  var sysmlElement = self.getTraceSysMLElement();
+  var connectors = SysML!Connector.all.select(connector | 
+    not connector.getEnds().isEmpty()
+    and connector.getKind() == SysML!ConnectorKind#assembly);
+	
+  if (sysmlElement.isDefined()
+    and sysmlElement.isTypeOf(SysML!Trigger)
+    and not sysmlElement.getPorts().isEmpty()) {
+    var sourceEnds = getTriggerPortMatchingConnectorSourceEnd(sysmlElement.getPorts().first());
+    if (sourceEnds.isDefined and sourceEnds.size() > 0) {
+      result = true;
+    }
+  }
+  return result;
+}
+
+// Check if the event is being sent on a port
+// and not to a delegate to the outside 
+@cached
+operation CFTA!Event doesEventSendAtInternalPortTriggeringFailure () : Boolean {
+  var result = false;
+  var sysmlElement = self.getTraceSysMLElement();
+  
+  var connectors = SysML!Connector.all.select(connector | 
+    not connector.getEnds().isEmpty()
+    and connector.getKind() == SysML!ConnectorKind#assembly);
+  
+  if (sysmlElement.isDefined() and sysmlElement.isTypeOf(SysML!State)) {
+
+    var transitions = sysmlElement.incomings.select(transition | 
+      transition.effect.isDefined() 
+      and transition.effect.isTypeOf(SysML!Activity)
+      and transition.effect.getOwnedElements().exists(effect | 
+        effect.isTypeOf(SysML!SendSignalAction) 
+        and effect.onPort.isDefined()));
+    if (transitions.isDefined() 
+      and transitions.size() > 0) {
+      for (transition in transitions) {
+        var port = transition.effect.getOwnedElements().first().onPort;
+        var targetEnds = getTriggerPortMatchingConnectorSourceEnd(port);
+        for (end in targetEnds) {
+          var triggerExists = SysML!Trigger.all.exists( trigger | 
+            not trigger.getPorts().isEmpty()
+            and trigger.getPorts().first() == end.getRole()
+            and (trigger.eContainer().target.hasStereotype("DaStep")
+              or trigger.eContainer().hasStereotype("DaStep")));
+          if (triggerExists) {
+            result = true;
+            return result;
+          }
+        }
+      }
+    }
+  }
+  return result;
+}
+
+@cached
+operation getComponentFTBlockInstances(component :CFTA!Component) {
+    var sourceBlk = component.getTraceSysMLElement();
+    var instances = SysML!Property.all.select(property | property.type.isDefined() 
+      and (property.getAggregation() =  SysML!AggregationKind#composite)
+      and (ecoreUtil.getURI(property.type) = ecoreUtil.getURI(sourceBlk.base_Class)));
+    return instances;
+}
+
+operation SysML!Block getBlockInstances() : Set {
+  return self.base_Class.getBlockInstances();
+}
+
+operation SysML!Class getBlockInstances() : Set {
+  var instances = SysML!Property.all.select(property | property.type.isDefined() 
+    and (property.getAggregation() =  SysML!AggregationKind#composite)
+    and (property.type = self)).asSet();
+  return instances;
+}
+
+// Invoked by a CFTA element to get a SysML element
+@cached
+operation Any getTraceSysMLElement() :Any {
+  var sources = TRACEv2!TraceLink.all.select(link | link.targets.exists(trgt | (ecoreUtil.getURI(self) =  ecoreUtil.getURI(trgt))));
+  if(sources.isDefined() and not sources.isEmpty()) {
+    var source = sources.first().source;
+    return source;
+  }
+}
+
+@cached
+operation getTriggerPortMatchingConnectorSourceEnd (port: SysML!Port) : Sequence(SysML!Port) {
+  var connectors = SysML!Connector.all.select(connector | 
+    not connector.getEnds().isEmpty()
+    and connector.getKind() == SysML!ConnectorKind#assembly);
+  var sources :Sequence(SysML!Port);
+  for (connector in connectors) {
+    for (end in connector.getEnds()) {
+      if (ecoreUtil.getURI(end.getRole()) == ecoreUtil.getURI(port)) {
+        log("targetpart:1: " + end.getPartWithPort());
+        sources.add(connector.getEnds().selectOne(inEnd|inEnd <> end)); // Need to get other end role
+      }
+    }
+  }
+  return sources;
+}
+
+@cached
+operation getTriggerPortMatchingConnectorSourceEnd (port: SysML!Port, part :SysML!Property) : Sequence(SysML!Port) {
+  var connectors = SysML!Connector.all.select(connector | 
+    not connector.getEnds().isEmpty()
+    and connector.getKind() == SysML!ConnectorKind#assembly);
+  var sources :Sequence(SysML!Port);
+  for (connector in connectors) {
+    for (end in connector.getEnds()) {
+      if (ecoreUtil.getURI(end.getRole()) == ecoreUtil.getURI(port)
+        and end.getPartWithPort() = part) {
+        log("targetpart:2: " + end.getPartWithPort());
+        sources.add(connector.getEnds().selectOne(inEnd|inEnd <> end));
+      }
+    }
+  }
+  return sources;
+}
+
+operation SysML!Trigger getTriggerSourceEvents (part :SysML!Property) : Set(CFTA!Event) {
+  log("Trigger: " + self);
+  var resultStates :Set(SysML!State);
+  var resultEvents :Set(CFTA!Event);
+  var transitions = SysML!Transition.all.select(transition | 
+    transition.getEffect().isDefined() 
+    and transition.getEffect().isTypeOf(SysML!Activity));
+  var sourceEnds = getTriggerPortMatchingConnectorSourceEnd( self.getPorts().first(), part);
+  for (sourceEnd in sourceEnds) {
+    log("sourcePart: " + sourceEnd.getPartWithPort());
+    log("sourcePort: " + sourceEnd.getRole());
+    var sourcetrns = transitions.select(transition | 
+      transition.effect.getOwnedElements().select(effect | 
+        effect.isTypeOf(SysML!SendSignalAction) 
+        and effect.onPort == sourceEnd.getRole()
+        and ecoreUtil.getURI(effect.signal) == ecoreUtil.getURI(self.event.signal)).notEmpty());
+    if (sourcetrns.isEmpty()) {
+      log("does not have source transistions");
+    } else {
+      log("sourcetrns: " + sourcetrns);
+      for (sourcetrn in sourcetrns) {
+        var states = SysML!State.all.select(state | state.incomings.includes(sourcetrn));
+        for (state in states) {
+          state.~part = sourceEnd.getPartWithPort();
+          resultStates.add(state);
+        }
+      }
+    }
+  }
+  
+  if (resultStates.isDefined()) {
+    for (result in resultStates) {
+      var cftaElements = result.getCFTAElement();
+      if (cftaElements.isUndefined()) { continue; }
+      var equivalents = cftaElements.getEquivalentList();
+      if (equivalents.notEmpty()) {
+        for (equi in equivalents) {
+          equi.~part = result.~part;
+          resultEvents.add(equi);
+        }
+      }
+    }
+  }
+  return resultEvents;
+}
+
+@cached
+operation Any getCFTAElement() :Any {
+  var links = TRACEv2!TraceLink.all;
+  var cftaelements = links.select(link | self.extendedEqual(link.source));
+  log("cftaelements: " + cftaelements);
+  validateSize(cftaelements, 1, "More than one match for: " + self + ": " + cftaelements);
+  if (cftaelements.size() = 0){
+    return null;
+  }
+
+  return cftaelements.first().targets;
+}
+
+@cached
+operation Any extendedEqual(trgt:Any) : Boolean {
+  var selfXMIId = self.eResource().getURIFragment(self);
+  var targetXMIId = trgt.eResource().getURIFragment(trgt);
+  return (selfXMIId = targetXMIId);
+}
+
+operation Collection getEquivalentList () : Set {
+  var result :Set;
+  for (element in self) {
+    result.add(element.getEquivalent().first());
+  }
+  return result;
+}
+
+// This method is used to get the CFT element from the loaded CFTA model, 
+// rather than from the TRACE model. This is used following the call to
+// getCFTAElement(), a complementary method.
+@cached
+operation Any getEquivalent() :Any {
+  var equ;
+  if (self.isTypeOf(CFTA!Event)) {
+    equ = CFTA!Event.all.select(event | ecoreUtil.getURI(self) =  ecoreUtil.getURI(event));
+  } else if (self.isTypeOf(CFTA!FTAModel)) {
+    equ = CFTA!FTAModel.all.select(ftamodel | ecoreUtil.getURI(self) =  ecoreUtil.getURI(ftamodel));
+  } else if (self.isTypeOf(CFTA!Port)) {
+    equ = CFTA!Port.all.select(port | ecoreUtil.getURI(self) =  ecoreUtil.getURI(port));
+  } else if (self.isTypeOf(CFTA!Component)) {
+    equ = CFTA!Component.all.select(component | ecoreUtil.getURI(self) =  ecoreUtil.getURI(component));
+  } else {
+    handleError("Type is not implemented: " + self.type + ":" + self);
+  }
+  return equ;
+}
+
+operation CFTA!Gate getEquivalentGate () : EMFTA!Gate {
+  var result : EMFTA!Gate = new EMFTA!Gate; 
+  switch(self.type) {
+    case CFTA!GateType#OR : result.type = EMFTA!GateType#OR;
+    case CFTA!GateType#AND : result.type = EMFTA!GateType#AND;
+    case CFTA!GateType#XOR : result.type = EMFTA!GateType#XOR;
+  }
+  return result;
+}
