@@ -1,4 +1,4 @@
-# SysMLTransformation
+# Model-based transformation
 This repository contains Model-based transformation of OMG SysML model using Epsilon framework.
 Epsilon framework: https://www.eclipse.org/epsilon/
 
